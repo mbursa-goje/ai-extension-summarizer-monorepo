@@ -154,7 +154,103 @@ The content script listens for `EXTRACT_TEXT`, chooses `article` first, `main` s
 
 ### `frontend/src/App.tsx`
 
-`useState` stores popup state: summary text, current status, page title, error message, and copy state. The `summarize` function queries the active tab, requests extracted text from `content.js`, sends that text to `background.js`, receives a summary, and updates the UI. The returned JSX renders the title, `Summarize Page` button, loading indicators, scrollable summary, retry state, copy button, clear button, and keyboard focus rings.
+`import { useState } from "react";` imports React state management for the popup.
+
+`import { Copy } from "lucide-react";` imports the copy icon used by the footer copy button.
+
+`const parseSummary = (summary: string) => {` defines a parser helper outside the component. Keeping it outside `App` prevents the function from being recreated as component-local logic and keeps the parsing responsibility separate from rendering.
+
+`const sections = { summary: "", insights: "", readingTime: "" };` creates the default structured output object. Each property starts empty so the UI can conditionally render only sections that were actually found.
+
+`const summaryMatch = summary.match(/Summary:\s*([\s\S]*?)(?=Key insights:|$)/i);` searches the raw AI response for the `Summary:` section.
+
+The `Summary:` part of the regex is a literal label. It means the parser expects the backend's model output to contain that exact section name.
+
+The `\s*` part means "match zero or more whitespace characters." `\s` includes spaces, tabs, and line breaks. The `*` means there may be no whitespace or lots of whitespace after `Summary:`.
+
+The `([\s\S]*?)` part is the capture group. Parentheses create a captured value that can be read later as `summaryMatch?.[1]`. `[\s\S]` means "match any character" because it includes both whitespace (`\s`) and non-whitespace (`\S`). This is used instead of `.` because normal dot matching does not always include newlines. The `*?` makes the match lazy, meaning it captures as little text as possible while still allowing the full regex to succeed.
+
+The `(?=Key insights:|$)` part is a positive lookahead. It checks what comes next without consuming it. It stops the summary capture right before `Key insights:` or the end of the string. The `|` means "or." The `$` means "end of the full string."
+
+The final `i` flag means case-insensitive matching, so `Summary:`, `summary:`, or `SUMMARY:` can match.
+
+`const insightsMatch = summary.match(/Key insights:\s*([\s\S]*?)(?=Estimated reading time:|$)/i);` searches for the `Key insights:` section using the same regex strategy. The literal start label is `Key insights:`. The capture group collects everything after that label. The lookahead stops when `Estimated reading time:` starts or when the response ends.
+
+`const readingTimeMatch = summary.match(/Estimated reading time:\s*([\s\S]*)/i);` searches for the final reading-time section. It uses `[\s\S]*` instead of `[\s\S]*?` because there is no next section to stop before; it can capture everything remaining after the label.
+
+`sections.summary = summaryMatch?.[1]?.trim() || "";` stores the captured Summary text. `?.` is optional chaining, so missing matches do not crash the popup. `[1]` reads the first capture group because `[0]` would be the full matched text including the label. `trim()` removes extra line breaks and spaces. `|| ""` falls back to an empty string.
+
+`sections.insights = insightsMatch?.[1]?.trim() || "";` stores the captured Key insights text with the same safety behavior.
+
+`sections.readingTime = readingTimeMatch?.[1]?.trim() || "";` stores the captured Estimated reading time text.
+
+`return sections;` returns the parsed object to the popup component.
+
+`export function App({ Status = "idle" }: { ... }) {` defines and exports the popup component. `Status` defaults to `idle`, which means the popup waits for the user to click `Summarize Page` instead of starting automatically.
+
+`const [summary, setSummary] = useState<string>("");` stores the raw summary returned by the background worker.
+
+`const [status, setStatus] = useState<...>(Status);` stores the popup state. The allowed values are `idle`, `extracting`, `summarizing`, `done`, and `error`.
+
+`const [pageTitle, setPageTitle] = useState("Current page");` stores the active tab title shown above the button and summary.
+
+`const [errorMessage, setErrorMessage] = useState("");` stores a human-readable error when extraction or summarization fails.
+
+`const [copied, setCopied] = useState(false);` tracks whether the Copy button recently succeeded.
+
+`const parsedSummary = parseSummary(summary);` converts raw backend output into structured sections on every render.
+
+`const hasParsedSummary = parsedSummary.summary || parsedSummary.insights || parsedSummary.readingTime;` checks whether at least one expected section was found. This prevents an empty output box if the AI returns useful text without exact labels.
+
+`async function summarize() {` defines the main popup action.
+
+`setSummary("");`, `setErrorMessage("");`, and `setStatus("extracting");` reset old output, clear old errors, and show the extraction state.
+
+`const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });` asks Chrome for the active tab in the current window. `chrome.tabs.query` returns an array, and `[tab]` takes the first tab from that array.
+
+`setPageTitle(tab.title || "Current page");` displays the active tab title or a fallback label.
+
+`if (!tab.id) { throw new Error("No active tab was found."); }` validates that Chrome returned a tab with an ID before trying to message it. `chrome.tabs.sendMessage` needs a numeric tab ID. Without this guard, the code would rely on `tab.id!`, which tells TypeScript to trust the value but does not protect runtime behavior.
+
+`let response;` declares a variable outside the `try` block so the extracted text response can be used after the `try/catch` finishes.
+
+`try { ... } catch { ... }` wraps the content-script message call. This is important because `chrome.tabs.sendMessage` throws when the current page does not have a receiving content script.
+
+`response = await chrome.tabs.sendMessage(tab.id, { type: "EXTRACT_TEXT" });` sends `EXTRACT_TEXT` to `frontend/public/content.js` in the active tab. The message type must match the content script listener exactly. `content.js` listens for `EXTRACT_TEXT`, so using a different string such as `EXTRACT_PAGE_CONTENT` would fail.
+
+`catch { throw new Error("Refresh this page, then try again. The content script is not available on this tab."); }` replaces Chrome's technical runtime error with a useful user-facing instruction. This catches the common extension error: `Could not establish connection. Receiving end does not exist.` That error usually means the tab was opened before the extension was loaded, the page needs a refresh, the wrong folder was loaded, or the page is restricted.
+
+`if (!response?.text) { throw new Error("No readable page text was found."); }` validates the content script response before sending anything to the background worker. `response?.text` uses optional chaining so the popup does not crash if `response` is undefined. This guard prevents an empty backend request and gives a clearer error when the content script ran but did not extract useful text.
+
+`setStatus("summarizing");` switches the UI from reading state to AI loading state.
+
+`const result = await chrome.runtime.sendMessage({ type: "SUMMARIZE_PAGE", text: response.text, url: tab.url });` sends extracted text and the page URL to the background service worker.
+
+`if (!result?.ok) { throw new Error(result?.error || "Failed to summarize"); }` converts a failed worker response into a normal JavaScript error so the `catch` block can handle it.
+
+`setSummary(result.summary);` stores the worker's summary result.
+
+`setStatus("done");` shows the final output and footer actions.
+
+`catch (error) { ... }` handles Chrome API errors, extraction failures, worker errors, and backend errors.
+
+`setErrorMessage(error instanceof Error ? error.message : "Could not summarize this page.");` stores a safe message for the popup.
+
+`setStatus("error");` renders the retry UI.
+
+`const handleRetry = () => { ... };` clears the summary and starts summarization again.
+
+`const handleCopy = async () => { ... };` writes the raw summary to the clipboard, flips `copied` to true, and resets the copied label after two seconds.
+
+The returned JSX renders the popup shell. The header shows the extension name and the active status. The main area shows the active page title, the `Summarize Page` button, animated loading dots, structured sections, fallback raw text, or error retry UI. The footer appears only when `status === "done"` and contains Copy and Clear actions.
+
+The structured output block renders `Summary`, `Key insights`, and `Estimated reading time` as separate sections. Each section only appears when its parsed value is non-empty.
+
+`!hasParsedSummary && <p ...>{summary}</p>` is the fallback renderer. If the regex parser cannot find section labels, the popup still displays the raw summary instead of appearing blank.
+
+The Clear button resets `summary`, returns `status` to `idle`, clears `errorMessage`, and resets `copied`.
+
+All interactive buttons include focus-ring classes such as `focus:outline-none`, `focus:ring-2`, `focus:ring-blue-500`, and `focus:ring-offset-2`, which makes keyboard navigation visible.
 
 ### `frontend/src/main.tsx`
 
