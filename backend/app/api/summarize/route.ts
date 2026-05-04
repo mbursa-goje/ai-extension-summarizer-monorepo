@@ -28,9 +28,10 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const result = await generateText({
-    model: openrouter(SUMMARIZE_MODEL),
-    system: `You are a concise article summarizer.
+  try {
+    const result = await generateText({
+      model: openrouter(SUMMARIZE_MODEL),
+      system: `You are a concise article summarizer.
 Return a structured summary using exactly these sections:
 Summary:
 - 3 to 5 bullet points, one sentence each.
@@ -45,20 +46,31 @@ Rules:
 - Do not add opinions.
 - Do not add a preamble or conclusion.
 - Use plain text only.`,
-    messages: [{ role: "user", content: text }],
-    maxOutputTokens: 450,
-  });
+      messages: [{ role: "user", content: text }],
+      maxOutputTokens: 450,
+    });
 
-  const summary = result.text.trim();
+    const summary = result.text.trim();
 
-  if (!summary) {
+    if (!summary) {
+      return Response.json(
+        { error: "The AI provider returned an empty summary." },
+        { status: 502, headers: CORS_HEADERS },
+      );
+    }
+
+    return new Response(summary, {
+      headers: CORS_HEADERS,
+    });
+  } catch (error) {
     return Response.json(
-      { error: "The AI provider returned an empty summary." },
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "The AI provider could not generate a summary.",
+      },
       { status: 502, headers: CORS_HEADERS },
     );
   }
-
-  return new Response(summary, {
-    headers: CORS_HEADERS,
-  });
 }

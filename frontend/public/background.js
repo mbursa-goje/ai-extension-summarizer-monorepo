@@ -63,7 +63,17 @@ async function summarizePage(message) {
   });
 
   if (!response.ok) {
-    throw new Error("The summarizer API returned an error.");
+    const errorText = await response.text();
+    let errorMessage = "The summarizer API returned an error.";
+
+    try {
+      const errorJson = JSON.parse(errorText);
+      errorMessage = errorJson.error || errorMessage;
+    } catch {
+      errorMessage = errorText || errorMessage;
+    }
+
+    throw new Error(errorMessage);
   }
 
   const summary = (await response.text()).trim();

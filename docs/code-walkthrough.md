@@ -142,7 +142,19 @@ The deployment section points to the exact frontend file that must be changed af
 
 `body: JSON.stringify({ text })` serializes the extracted article text.
 
-`if (!response.ok) { throw new Error(...) }` catches non-success HTTP status codes.
+`if (!response.ok) { ... }` catches non-success HTTP status codes from the backend.
+
+`const errorText = await response.text();` reads the backend error body. The backend returns JSON for expected API failures, but this fallback also works if a platform returns plain text or HTML.
+
+`let errorMessage = "The summarizer API returned an error.";` starts with a safe default message.
+
+`JSON.parse(errorText)` attempts to parse the backend error as JSON. If the backend returns `{ "error": "..." }`, the worker can show that specific message in the popup.
+
+`errorMessage = errorJson.error || errorMessage;` preserves the backend's useful error message when it exists.
+
+`catch { errorMessage = errorText || errorMessage; }` falls back to the raw response text when the error body is not JSON.
+
+`throw new Error(errorMessage);` sends the final user-readable error back to the popup.
 
 `const summary = (await response.text()).trim();` reads the backend response as plain text and removes accidental outer whitespace.
 
@@ -325,10 +337,10 @@ This sets the private API key from an environment variable. This is the main rea
 This closes the `createOpenAI` configuration object and finishes creating the provider.
 
 ```ts
-export const SUMMARIZE_MODEL = "anthropic/claude-3-5-sonnet-20240909";
+export const SUMMARIZE_MODEL = "anthropic/claude-3.5-sonnet";
 ```
 
-This stores the selected summarization model in one exported constant. The route imports this value when it calls the AI provider. Keeping the model in a constant makes upgrades simple and avoids burying a model string inside request logic.
+This stores the selected summarization model in one exported constant. The route imports this value when it calls the AI provider. Keeping the model in a constant makes upgrades simple and avoids burying a model string inside request logic. The id uses OpenRouter's model naming format for Claude 3.5 Sonnet.
 
 ### `backend/app/api/summarize/route.ts`
 
@@ -477,7 +489,13 @@ This closes the JSON response call.
 This closes the validation branch.
 
 ```ts
-  const result = await generateText({
+  try {
+```
+
+This starts backend error handling around the AI provider call. Without this block, provider failures become a generic Next.js 500 page.
+
+```ts
+    const result = await generateText({
 ```
 
 This starts the AI request and waits for the model to return text. The route uses `await` because it needs the final summary before creating the HTTP response.
@@ -549,13 +567,13 @@ This limits the generated response. The value gives room for all required sectio
 This closes the AI request configuration.
 
 ```ts
-  const summary = result.text.trim();
+    const summary = result.text.trim();
 ```
 
 This reads the generated text from the AI SDK result and trims accidental outer whitespace.
 
 ```ts
-  if (!summary) {
+    if (!summary) {
 ```
 
 This checks whether the AI provider returned an empty string.
@@ -571,7 +589,7 @@ This checks whether the AI provider returned an empty string.
 This returns a 502 Bad Gateway style error when the upstream AI provider gives an unusable empty response. The frontend can show this as a real error instead of a blank successful state.
 
 ```ts
-  return new Response(summary, {
+    return new Response(summary, {
 ```
 
 This creates a normal plain-text HTTP response containing the generated summary.
@@ -581,6 +599,26 @@ This creates a normal plain-text HTTP response containing the generated summary.
 ```
 
 This attaches CORS headers to the successful response so the extension can read it.
+
+```ts
+  } catch (error) {
+```
+
+This catches AI SDK, OpenRouter, model, authentication, and network failures.
+
+```ts
+    return Response.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "The AI provider could not generate a summary.",
+      },
+      { status: 502, headers: CORS_HEADERS },
+    );
+```
+
+This returns provider failures as readable JSON with a 502 status. The background worker reads this JSON and displays the message in the popup, which is much more useful than a blank result or a generic HTML error page.
 
 ```ts
   });
