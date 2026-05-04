@@ -76,7 +76,7 @@ The deployment section points to the exact frontend file that must be changed af
 
 `"permissions": ["activeTab", "tabs", "storage"]` gives the extension permission to read the current tab, access tab metadata, and cache summaries.
 
-`"host_permissions": ["<all_urls>", "http://localhost:3000/*"]` allows the content script to run on webpages and allows local backend API requests. Before deployment, add the deployed backend host here.
+`"host_permissions": ["<all_urls>", "https://ai-extension-summarizer-monorepo.vercel.app/*"]` allows the content script to run on webpages and allows API requests to the deployed Vercel backend.
 
 `"background"` starts the background service worker configuration.
 
@@ -92,7 +92,7 @@ The deployment section points to the exact frontend file that must be changed af
 
 ### `frontend/public/background.js`
 
-`const API_URL = "http://localhost:3000/api/summarize";` stores the backend endpoint in one place. This is the line to replace with the deployed URL later.
+`const API_URL = "https://ai-extension-summarizer-monorepo.vercel.app/api/summarize";` stores the deployed backend endpoint in one place. The background service worker uses this URL when it sends extracted page text to the secure backend proxy.
 
 `chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {` listens for extension messages. The popup sends `SUMMARIZE_PAGE` here after extracting text.
 
@@ -595,22 +595,28 @@ This file configures TypeScript for the backend. It enables strict mode, DOM and
 15. The background worker caches the summary by URL.
 16. The popup displays the result.
 
-## Deployment Edits
+## Deployment URL
 
-In `frontend/public/background.js`, replace:
+The backend is deployed on Vercel at:
 
-```js
-const API_URL = "http://localhost:3000/api/summarize";
+```
+https://ai-extension-summarizer-monorepo.vercel.app
 ```
 
-with your deployed backend URL:
+The extension calls this API route:
 
 ```js
-const API_URL = "https://your-deployed-site.vercel.app/api/summarize";
+const API_URL =
+  "https://ai-extension-summarizer-monorepo.vercel.app/api/summarize";
 ```
 
-In `frontend/public/manifest.json`, add the deployed host:
+The manifest allows requests to that deployed host:
 
 ```json
-"host_permissions": ["<all_urls>", "https://your-deployed-site.vercel.app/*"]
+"host_permissions": [
+  "<all_urls>",
+  "https://ai-extension-summarizer-monorepo.vercel.app/*"
+]
 ```
+
+After changing either deployment value, rebuild the extension with `npm run build` inside `frontend` and reload `frontend/dist` in Chrome.

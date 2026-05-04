@@ -1,4 +1,5 @@
-const API_URL = "http://localhost:3000/api/summarize";
+const API_URL =
+  "https://ai-extension-summarizer-monorepo.vercel.app/api/summarize";
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || message.type !== "SUMMARIZE_PAGE") {
