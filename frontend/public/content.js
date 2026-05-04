@@ -9,7 +9,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const text = (el?.textContent ?? "")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 10000);
+    .slice(0, 8000);
  sendResponse({text});
  return true;
 

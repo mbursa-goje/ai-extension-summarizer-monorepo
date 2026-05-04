@@ -170,7 +170,9 @@ The deployment section points to the exact frontend file that must be changed af
 
 ### `frontend/public/content.js`
 
-The content script listens for `EXTRACT_TEXT`, chooses `article` first, `main` second, and `body` last, reads `textContent`, collapses whitespace, trims the result, limits the text to 10,000 characters, and sends `{ text }` back to the popup. It does not inject summary HTML into the page, which keeps the page safer.
+The content script listens for `EXTRACT_TEXT`, chooses `article` first, `main` second, and `body` last, reads `textContent`, collapses whitespace, trims the result, limits the text to 8,000 characters, and sends `{ text }` back to the popup. It does not inject summary HTML into the page, which keeps the page safer.
+
+The `slice(0, 8000)` limit is a cost and reliability guard. It keeps very large pages from sending excessive input tokens to the backend. Smaller requests are cheaper, faster, and less likely to fail from provider limits.
 
 ### `frontend/src/App.tsx`
 
@@ -337,10 +339,12 @@ This sets the private API key from an environment variable. This is the main rea
 This closes the `createOpenAI` configuration object and finishes creating the provider.
 
 ```ts
-export const SUMMARIZE_MODEL = "anthropic/claude-3.5-sonnet";
+export const SUMMARIZE_MODEL = "openai/gpt-4o-mini";
 ```
 
-This stores the selected summarization model in one exported constant. The route imports this value when it calls the AI provider. Keeping the model in a constant makes upgrades simple and avoids burying a model string inside request logic. The id uses OpenRouter's model naming format for Claude 3.5 Sonnet.
+This stores the selected summarization model in one exported constant. The route imports this value when it calls the AI provider. Keeping the model in a constant makes upgrades simple and avoids burying a model string inside request logic. The id uses OpenRouter's model naming format for OpenAI GPT-4o mini.
+
+GPT-4o mini is intentionally used here because the extension needs concise page summaries, not deep reasoning. A smaller model is cheaper, faster, and better for repeated testing. Heavy frontier models can fail or become expensive during repeated trials because provider credits, rate limits, output token limits, and account quotas can be exhausted.
 
 ### `backend/app/api/summarize/route.ts`
 
@@ -566,10 +570,10 @@ These rules keep the model factual, compact, and safe for rendering as text in t
 This sends the extracted webpage content to the model as the user message.
 
 ```ts
-    maxOutputTokens: 450,
+    maxOutputTokens: 260,
 ```
 
-This limits the generated response. The value gives room for all required sections while controlling cost and latency.
+This limits the generated response. The value gives enough room for summary bullets, key insights, and reading time while keeping output cost lower. Output tokens are often more expensive than input tokens, so this cap is a direct cost-control measure.
 
 ```ts
   });

@@ -54,7 +54,7 @@ Rules:
 - Do not add a preamble or conclusion.
 - Use plain text only.`,
       messages: [{ role: "user", content: text }],
-      maxOutputTokens: 450,
+      maxOutputTokens: 260,
     });
 
     const summary = result.text.trim();

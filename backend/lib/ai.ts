@@ -5,4 +5,4 @@ export const openrouter = createOpenAI({
   apiKey: process.env.OPENROUTER_API_KEY!,
 });
 
-export const SUMMARIZE_MODEL = "anthropic/claude-3.5-sonnet";
+export const SUMMARIZE_MODEL = "openai/gpt-4o-mini";
