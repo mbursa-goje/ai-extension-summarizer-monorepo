@@ -1,79 +1,175 @@
 # AI Page Summarizer Chrome Extension
 
-This repository contains a Manifest V3 Chrome Extension and a secure Next.js API proxy for AI-powered page summaries.
+A local Manifest V3 Chrome Extension that extracts readable content from the current webpage, sends it to a secure AI backend, and displays a structured summary with key insights and estimated reading time.
 
-## Project Structure
+The extension is not intended for the Chrome Web Store. It is loaded locally from the generated `frontend/dist` folder.
 
-- `frontend/` contains the installable Chrome Extension popup, content script, background service worker, manifest, and UI source.
-- `backend/` contains the Next.js `/api/summarize` route that calls OpenRouter with a server-side API key.
-- `docs/code-walkthrough.md` explains the implementation line by line, with extra detail for the backend.
+## Repository Structure
 
-## Local Setup
+- `frontend/` contains the Chrome Extension UI, manifest, content script, background service worker, and Vite build setup.
+- `backend/` contains the deployed Next.js API proxy at `/api/summarize`.
+- `docs/code-walkthrough.md` contains a dense line-by-line implementation explanation, including the popup parser regex and backend API flow.
 
-Install dependencies in both apps:
+## Setup Instructions
+
+Install frontend dependencies:
 
 ```powershell
 cd frontend
 npm install
+```
+
+Install backend dependencies:
+
+```powershell
 cd ..\backend
 npm install
 ```
 
-Create `backend/.env.local`:
+Create `backend/.env.local` for local backend development:
 
 ```env
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-OPENROUTER_API_KEY=your_api_key_here
+OPENROUTER_API_KEY=your_openrouter_key
 ```
 
-Run the backend:
+Run the backend locally:
 
 ```powershell
-cd backend
 npm run dev
 ```
 
 Build the extension:
 
 ```powershell
-cd frontend
+cd ..\frontend
 npm run build
 ```
 
-Load the local extension in Chrome:
+## Local Extension Install Steps
 
-1. Open `chrome://extensions`.
-2. Enable Developer mode.
-3. Click Load unpacked.
-4. Select the `frontend/dist` folder.
-5. Open an article page and click the Article Summarizer extension icon.
+1. Open Chrome.
+2. Go to `chrome://extensions`.
+3. Enable **Developer mode**.
+4. Click **Load unpacked**.
+5. Select the `frontend/dist` folder.
+6. Open a normal article page.
+7. Click the **Article Summarizer** extension icon.
+8. Click **Summarize Page**.
 
-## Deployment
+If the popup says the content script is unavailable, refresh the article page and try again. Chrome does not inject content scripts into some already-open tabs until the page is refreshed after the extension is loaded.
 
-Deploy the `backend` folder to Vercel or another Next.js host. After deployment, update `frontend/public/background.js`:
+## Deployed Backend
 
-```js
-const API_URL = "https://your-deployed-site.vercel.app/api/summarize";
+The backend is deployed on Vercel:
+
+```text
+https://ai-extension-summarizer-monorepo.vercel.app
 ```
 
-Also update `frontend/public/manifest.json` so `host_permissions` includes your deployed backend domain.
+The extension calls:
 
-## Architecture
+```text
+https://ai-extension-summarizer-monorepo.vercel.app/api/summarize
+```
 
-The popup UI asks the active tab for readable page text. The content script extracts text from `article`, `main`, or `body`. The popup sends the extracted text and URL to the background service worker. The service worker checks `chrome.storage.local` for a cached summary, calls the backend when needed, stores the result, and returns it to the popup.
+The deployed backend uses Vercel environment variables:
 
-The backend owns the AI API key. It validates incoming JSON, handles CORS preflight requests, calls OpenRouter through the AI SDK, and streams a structured plain-text summary back to the extension.
+```env
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_API_KEY=stored_in_vercel_only
+```
+
+## Architecture Explanation
+
+The extension uses four main pieces:
+
+1. **Popup UI**: `frontend/src/App.tsx`
+   The popup shows the page title, summarize button, loading states, structured summary sections, copy action, clear action, and error messages.
+
+2. **Content script**: `frontend/public/content.js`
+   The content script receives `EXTRACT_TEXT`, chooses `article`, `main`, or `body`, normalizes text, limits it to 8,000 characters, and returns it to the popup.
+
+3. **Background service worker**: `frontend/public/background.js`
+   The service worker receives `SUMMARIZE_PAGE`, checks `chrome.storage.local` for a cached summary, calls the deployed backend when needed, rejects empty summaries, caches successful summaries by URL, and returns the result to the popup.
+
+4. **Backend API**: `backend/app/api/summarize/route.ts`
+   The backend validates the request body, checks that `OPENROUTER_API_KEY` is configured, calls OpenRouter through the AI SDK, and returns a plain-text structured summary.
+
+Flow:
+
+```text
+Popup -> Content script -> Popup -> Background worker -> Backend -> OpenRouter
+```
+
+Then the response returns:
+
+```text
+OpenRouter -> Backend -> Background worker -> Popup
+```
+
+## AI Integration Explanation
+
+The backend uses OpenRouter through the AI SDK with:
+
+```ts
+openai/gpt-4o-mini
+```
+
+This model was chosen because the extension needs concise summaries rather than deep reasoning. It is cheaper and faster than heavier models, which makes it more practical for repeated local testing.
+
+The backend prompt asks the model to return exactly these sections:
+
+- `Summary`
+- `Key insights`
+- `Estimated reading time`
+
+The popup parses those labels and renders each section separately. If a provider returns useful text without the expected labels, the popup falls back to rendering the raw summary so the user does not see a blank result.
 
 ## Security Decisions
 
-- No AI API key is committed or shipped in frontend code.
-- The extension calls a proxy backend instead of calling OpenRouter directly.
-- `chrome.storage.local` caches generated summaries by URL to reduce repeated API calls.
-- The popup renders summary text as text, not raw HTML.
-- The content script only extracts text and does not inject generated content into the page.
+- The OpenRouter API key is never placed in `frontend/`, `manifest.json`, `content.js`, `background.js`, or the built extension.
+- The API key lives only in Vercel environment variables and local `backend/.env.local`.
+- `.env` files are ignored by Git.
+- The extension calls the backend proxy instead of calling OpenRouter directly.
+- The popup renders summary text as React text, not raw HTML, which avoids XSS from model output.
+- The content script extracts text only and does not inject model output into the page.
+- The backend validates that `text` is a non-empty string before calling the AI provider.
+- The background worker rejects empty backend responses before caching them.
 
 ## Trade-offs
 
-- The content extractor uses lightweight heuristics instead of a full Readability parser, so it is fast but may include extra text on unusual pages.
-- The background worker returns a complete summary after the backend finishes, rather than streaming partial text into the popup.
-- Highlighting key points in-page is not implemented yet because the core secure summarization flow was prioritized.
+- The extractor uses lightweight DOM heuristics instead of Mozilla Readability, so it is fast and dependency-free but may include extra page text on unusual layouts.
+- The extension sends the first 8,000 characters of extracted text to control cost and reduce provider-limit failures.
+- The backend returns one complete summary instead of streaming partial output into the popup. This keeps the service worker and popup message flow simpler.
+- Summaries are cached by URL, which reduces duplicate API calls, but a page with changing content may need the Clear button before re-summarizing.
+- In-page highlighting is not implemented. The project prioritizes reliable secure summarization, caching, and a clean popup UX.
+
+## Verification
+
+Frontend:
+
+```powershell
+cd frontend
+npm run lint
+npm run build
+```
+
+Backend:
+
+```powershell
+cd backend
+npm run build
+```
+
+## Submission Notes
+
+For the demo video, show:
+
+- loading `frontend/dist` as an unpacked extension
+- opening an article page
+- clicking **Summarize Page**
+- viewing `Summary`, `Key insights`, and `Estimated reading time`
+- using **Copy** and **Clear**
+- explaining that the API key is secured in Vercel, not exposed in the extension
+
