@@ -268,6 +268,8 @@ The final `i` flag means case-insensitive matching, so `Summary:`, `summary:`, o
 
 `const handleCopy = async () => { ... };` writes the raw summary to the clipboard, flips `copied` to true, and resets the copied label after two seconds.
 
+The default Copy label inherits the gray text color from its button so it visually matches the gray copy icon. The temporary `Copied!` label remains green to signal a successful clipboard action.
+
 `const handleClear = async () => { ... };` clears the popup output and asks the background service worker to remove the cached summary for the current page URL. This prevents an old blank or stale summary from reappearing immediately after pressing Clear.
 
 The returned JSX renders the popup shell. The header shows the extension name and the active status. The main area shows the active page title, the `Summarize Page` button, animated loading dots, structured sections, fallback raw text, or error retry UI. The footer appears only when `status === "done"` and contains Copy and Clear actions.

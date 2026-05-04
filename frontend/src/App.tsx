@@ -250,7 +250,7 @@ export function App({
             ) : (
               <>
                 <Copy size={20} />
-                <span className="text-green-500">Copy</span>
+                <span>Copy</span>
               </>
             )}
           </button>
