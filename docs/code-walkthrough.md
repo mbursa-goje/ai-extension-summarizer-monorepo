@@ -489,6 +489,17 @@ This closes the JSON response call.
 This closes the validation branch.
 
 ```ts
+  if (!process.env.OPENROUTER_API_KEY) {
+    return Response.json(
+      { error: "OPENROUTER_API_KEY is not configured in the backend." },
+      { status: 502, headers: CORS_HEADERS },
+    );
+  }
+```
+
+This checks whether the deployed backend can read the OpenRouter API key before making the provider request. If Vercel does not have `OPENROUTER_API_KEY`, or the deployment did not pick up the environment variable, the route returns a clear JSON error instead of letting OpenRouter fail with `Missing Authentication header`.
+
+```ts
   try {
 ```
 

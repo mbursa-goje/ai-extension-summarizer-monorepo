@@ -28,6 +28,13 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  if (!process.env.OPENROUTER_API_KEY) {
+    return Response.json(
+      { error: "OPENROUTER_API_KEY is not configured in the backend." },
+      { status: 502, headers: CORS_HEADERS },
+    );
+  }
+
   try {
     const result = await generateText({
       model: openrouter(SUMMARIZE_MODEL),
