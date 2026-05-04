@@ -2,6 +2,22 @@ const API_URL =
   "https://ai-extension-summarizer-monorepo.vercel.app/api/summarize";
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === "CLEAR_SUMMARY_CACHE") {
+    clearSummaryCache(message)
+      .then(sendResponse)
+      .catch((error) => {
+        sendResponse({
+          ok: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Unable to clear the cached summary.",
+        });
+      });
+
+    return true;
+  }
+
   if (!message || message.type !== "SUMMARIZE_PAGE") {
     return false;
   }
@@ -50,7 +66,12 @@ async function summarizePage(message) {
     throw new Error("The summarizer API returned an error.");
   }
 
-  const summary = await response.text();
+  const summary = (await response.text()).trim();
+
+  if (!summary) {
+    throw new Error("The summarizer API returned an empty summary.");
+  }
+
   await chrome.storage.local.set({ [cacheKey]: summary });
 
   return {
@@ -64,4 +85,13 @@ async function summarizePage(message) {
 // This function returns a cache key used as the storage key
 function createCacheKey(url) {
   return `summary:${url || "current-page"}`;
+}
+
+async function clearSummaryCache(message) {
+  const url = typeof message.url === "string" ? message.url : "";
+  await chrome.storage.local.remove(createCacheKey(url));
+
+  return {
+    ok: true,
+  };
 }

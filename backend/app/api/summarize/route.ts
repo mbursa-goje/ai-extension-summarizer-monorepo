@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { streamText } from "ai";
+import { generateText } from "ai";
 import { openrouter, SUMMARIZE_MODEL } from "@/lib/ai";
 
 export const runtime = "edge";
@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const result = streamText({
+  const result = await generateText({
     model: openrouter(SUMMARIZE_MODEL),
     system: `You are a concise article summarizer.
 Return a structured summary using exactly these sections:
@@ -49,7 +49,16 @@ Rules:
     maxOutputTokens: 450,
   });
 
-  return result.toTextStreamResponse({
+  const summary = result.text.trim();
+
+  if (!summary) {
+    return Response.json(
+      { error: "The AI provider returned an empty summary." },
+      { status: 502, headers: CORS_HEADERS },
+    );
+  }
+
+  return new Response(summary, {
     headers: CORS_HEADERS,
   });
 }

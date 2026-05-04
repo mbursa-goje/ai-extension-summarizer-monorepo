@@ -34,6 +34,7 @@ export function App({
     "idle" | "extracting" | "summarizing" | "done" | "error"
   >(Status);
   const [pageTitle, setPageTitle] = useState("Current page");
+  const [pageUrl, setPageUrl] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [copied, setCopied] = useState(false);
   const parsedSummary = parseSummary(summary);
@@ -55,6 +56,7 @@ export function App({
         currentWindow: true,
       });
       setPageTitle(tab.title || "Current page");
+      setPageUrl(tab.url || "");
 
       if (!tab.id) {
         throw new Error("No active tab was found.");
@@ -110,6 +112,20 @@ export function App({
     await navigator.clipboard.writeText(summary);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleClear = async () => {
+    if (pageUrl) {
+      await chrome.runtime.sendMessage({
+        type: "CLEAR_SUMMARY_CACHE",
+        url: pageUrl,
+      });
+    }
+
+    setSummary("");
+    setStatus("idle");
+    setErrorMessage("");
+    setCopied(false);
   };
 
   return (
@@ -223,7 +239,7 @@ export function App({
         <footer className="flex items-center justify-between gap-2 border-t border-gray-100 px-4 py-3">
           <button
             onClick={handleCopy}
-            className="flex items-center justify-center text-gray-500 text-xs gap-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+            className="flex cursor-pointer items-center justify-center gap-1.5 text-xs text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
           >
             {copied ? (
               <>
@@ -239,13 +255,8 @@ export function App({
             )}
           </button>
           <button
-            onClick={() => {
-              setSummary("");
-              setStatus("idle");
-              setErrorMessage("");
-              setCopied(false);
-            }}
-            className="text-xs text-gray-500 hover:text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+            onClick={handleClear}
+            className="cursor-pointer text-xs text-gray-500 hover:text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
           >
             Clear
           </button>

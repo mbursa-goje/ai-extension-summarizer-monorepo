@@ -96,6 +96,10 @@ The deployment section points to the exact frontend file that must be changed af
 
 `chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {` listens for extension messages. The popup sends `SUMMARIZE_PAGE` here after extracting text.
 
+`if (message?.type === "CLEAR_SUMMARY_CACHE") { ... }` handles popup requests to remove the cached summary for the current URL. This matters because the Clear button should reset the UI and let the next summarize action call the backend again instead of immediately reusing stale cached output.
+
+`clearSummaryCache(message).then(sendResponse).catch(...)` runs the cache removal asynchronously and returns a structured `{ ok: true }` or `{ ok: false, error }` response to the popup.
+
 `if (!message || message.type !== "SUMMARIZE_PAGE") {` validates that the message exists and is the correct action.
 
 `return false;` tells Chrome this listener is not handling unrelated messages.
@@ -140,13 +144,17 @@ The deployment section points to the exact frontend file that must be changed af
 
 `if (!response.ok) { throw new Error(...) }` catches non-success HTTP status codes.
 
-`const summary = await response.text();` reads the backend response as plain text.
+`const summary = (await response.text()).trim();` reads the backend response as plain text and removes accidental outer whitespace.
+
+`if (!summary) { throw new Error("The summarizer API returned an empty summary."); }` prevents the popup from entering the `done` state with a blank body. If the backend or AI provider returns an empty string, the popup now shows an error instead of a confusing empty result.
 
 `await chrome.storage.local.set({ [cacheKey]: summary });` saves the summary by URL.
 
 `return { ok: true, summary, cached: false };` returns the fresh summary to the popup.
 
 `function createCacheKey(url) { return \`summary:${url || "current-page"}\`; }` namespaces cache values and handles missing URLs.
+
+`async function clearSummaryCache(message) { ... }` removes the cached summary for a URL. It validates `message.url`, builds the same cache key used by `summarizePage`, calls `chrome.storage.local.remove`, and returns `{ ok: true }`.
 
 ### `frontend/public/content.js`
 
@@ -194,6 +202,8 @@ The final `i` flag means case-insensitive matching, so `Summary:`, `summary:`, o
 
 `const [pageTitle, setPageTitle] = useState("Current page");` stores the active tab title shown above the button and summary.
 
+`const [pageUrl, setPageUrl] = useState("");` stores the active tab URL so the Clear button can tell the background worker which cached summary to remove.
+
 `const [errorMessage, setErrorMessage] = useState("");` stores a human-readable error when extraction or summarization fails.
 
 `const [copied, setCopied] = useState(false);` tracks whether the Copy button recently succeeded.
@@ -209,6 +219,8 @@ The final `i` flag means case-insensitive matching, so `Summary:`, `summary:`, o
 `const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });` asks Chrome for the active tab in the current window. `chrome.tabs.query` returns an array, and `[tab]` takes the first tab from that array.
 
 `setPageTitle(tab.title || "Current page");` displays the active tab title or a fallback label.
+
+`setPageUrl(tab.url || "");` stores the active tab URL for cache clearing.
 
 `if (!tab.id) { throw new Error("No active tab was found."); }` validates that Chrome returned a tab with an ID before trying to message it. `chrome.tabs.sendMessage` needs a numeric tab ID. Without this guard, the code would rely on `tab.id!`, which tells TypeScript to trust the value but does not protect runtime behavior.
 
@@ -242,15 +254,19 @@ The final `i` flag means case-insensitive matching, so `Summary:`, `summary:`, o
 
 `const handleCopy = async () => { ... };` writes the raw summary to the clipboard, flips `copied` to true, and resets the copied label after two seconds.
 
+`const handleClear = async () => { ... };` clears the popup output and asks the background service worker to remove the cached summary for the current page URL. This prevents an old blank or stale summary from reappearing immediately after pressing Clear.
+
 The returned JSX renders the popup shell. The header shows the extension name and the active status. The main area shows the active page title, the `Summarize Page` button, animated loading dots, structured sections, fallback raw text, or error retry UI. The footer appears only when `status === "done"` and contains Copy and Clear actions.
 
 The structured output block renders `Summary`, `Key insights`, and `Estimated reading time` as separate sections. Each section only appears when its parsed value is non-empty.
 
 `!hasParsedSummary && <p ...>{summary}</p>` is the fallback renderer. If the regex parser cannot find section labels, the popup still displays the raw summary instead of appearing blank.
 
-The Clear button resets `summary`, returns `status` to `idle`, clears `errorMessage`, and resets `copied`.
+The Clear button calls `handleClear`, resets `summary`, returns `status` to `idle`, clears `errorMessage`, resets `copied`, and removes the page-specific summary cache through the background worker.
 
 All interactive buttons include focus-ring classes such as `focus:outline-none`, `focus:ring-2`, `focus:ring-blue-500`, and `focus:ring-offset-2`, which makes keyboard navigation visible.
+
+The Copy and Clear buttons also include `cursor-pointer`, so mouse users get a clear pointer cursor on hover.
 
 ### `frontend/src/main.tsx`
 
@@ -323,10 +339,10 @@ import { NextRequest } from "next/server";
 This imports the Next.js request type. The `POST` function receives `req: NextRequest`, so TypeScript can understand methods like `req.json()`.
 
 ```ts
-import { streamText } from "ai";
+import { generateText } from "ai";
 ```
 
-This imports the AI SDK streaming helper. `streamText` sends prompt instructions and messages to the selected model, then returns a result object that can be converted into an HTTP streaming response.
+This imports the AI SDK text generation helper. `generateText` waits for the model to finish and returns a normal text result. The extension expects a complete summary string, so this is simpler and more reliable than streaming for the current popup flow.
 
 ```ts
 import { openrouter, SUMMARIZE_MODEL } from "@/lib/ai";
@@ -461,10 +477,10 @@ This closes the JSON response call.
 This closes the validation branch.
 
 ```ts
-  const result = streamText({
+  const result = await generateText({
 ```
 
-This starts the AI request. `result` is not plain text yet; it is an AI SDK result object that can produce a text stream response.
+This starts the AI request and waits for the model to return text. The route uses `await` because it needs the final summary before creating the HTTP response.
 
 ```ts
     model: openrouter(SUMMARIZE_MODEL),
@@ -533,16 +549,38 @@ This limits the generated response. The value gives room for all required sectio
 This closes the AI request configuration.
 
 ```ts
-  return result.toTextStreamResponse({
+  const summary = result.text.trim();
 ```
 
-This converts the AI SDK result into an HTTP response that streams plain text.
+This reads the generated text from the AI SDK result and trims accidental outer whitespace.
+
+```ts
+  if (!summary) {
+```
+
+This checks whether the AI provider returned an empty string.
+
+```ts
+    return Response.json(
+      { error: "The AI provider returned an empty summary." },
+      { status: 502, headers: CORS_HEADERS },
+    );
+  }
+```
+
+This returns a 502 Bad Gateway style error when the upstream AI provider gives an unusable empty response. The frontend can show this as a real error instead of a blank successful state.
+
+```ts
+  return new Response(summary, {
+```
+
+This creates a normal plain-text HTTP response containing the generated summary.
 
 ```ts
     headers: CORS_HEADERS,
 ```
 
-This attaches CORS headers to the successful response.
+This attaches CORS headers to the successful response so the extension can read it.
 
 ```ts
   });
