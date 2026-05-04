@@ -298,6 +298,83 @@ The Vite config imports `defineConfig`, the React plugin, and the Tailwind plugi
 
 ## Backend Implementation
 
+### Mental Picture Of The Whole App
+
+Think of the project as a secure relay system with four stations.
+
+The first station is the popup. It is the user's control panel. The popup does not know any secrets and does not call the AI provider directly. It only asks the current tab for content, shows loading and error states, and renders the final structured summary.
+
+The second station is the content script. It lives inside the webpage and can read page text. Its job is deliberately narrow: choose the most article-like part of the page, clean the text, cap the size, and return plain text. It does not call the AI provider and does not inject generated HTML back into the page.
+
+The third station is the background service worker. It is the extension's coordinator. It receives the cleaned page text, checks whether the page already has a cached summary, calls the backend if needed, rejects empty responses, stores successful summaries by URL, and returns the result to the popup.
+
+The fourth station is the backend. It is the security boundary. It receives text from the extension, validates it, verifies that the OpenRouter API key exists, calls OpenRouter through the AI SDK, and returns a plain-text structured summary. The backend is the only place that can access the API key.
+
+The full mental model is:
+
+```text
+User clicks popup
+  -> popup asks content script for page text
+  -> content script extracts readable text
+  -> popup sends text to background worker
+  -> background worker checks cache
+  -> background worker calls backend if no cache exists
+  -> backend validates request
+  -> backend calls OpenRouter with secret API key
+  -> backend returns structured summary
+  -> background worker caches summary
+  -> popup renders summary sections
+```
+
+The most important design idea is separation of responsibility. The webpage extraction code only extracts. The popup only controls UI. The background worker coordinates extension state and caching. The backend protects secrets and owns the AI call.
+
+### Why The App Needs A Backend
+
+The extension needs a backend because Chrome Extension frontend files are not secret. Anything inside `frontend/public`, `frontend/src`, `manifest.json`, or the built `frontend/dist` folder can be inspected by a user. If the OpenRouter API key were placed in the extension, anyone could open the extension files and steal the key.
+
+The backend prevents that. Vercel stores `OPENROUTER_API_KEY` as an environment variable. The extension sends page text to the backend, and the backend adds the authentication details when it calls OpenRouter. The extension never sees the key.
+
+The backend also gives the project a controlled API surface. Instead of letting the extension send arbitrary requests to the AI provider, the backend accepts one specific request shape:
+
+```json
+{ "text": "article text here" }
+```
+
+It validates that `text` exists, rejects empty input, checks environment configuration, chooses the model, applies the summarization prompt, caps output tokens, handles provider errors, and returns a clean plain-text response.
+
+This makes the app safer and easier to debug. When something fails, the backend can return a useful JSON error such as `OPENROUTER_API_KEY is not configured in the backend` or `The AI provider returned an empty summary`, instead of leaving the popup with a blank response or a generic server page.
+
+### Backend Power Features
+
+The backend is small, but it carries several important responsibilities:
+
+1. **Secret isolation**
+   The OpenRouter key is read from `process.env.OPENROUTER_API_KEY`, so it lives in Vercel and local `.env.local`, not in the Chrome Extension.
+
+2. **Provider abstraction**
+   `backend/lib/ai.ts` creates one OpenRouter-compatible provider. The route imports `openrouter` and `SUMMARIZE_MODEL`, which keeps model configuration separate from request handling.
+
+3. **Model cost control**
+   The selected model is `openai/gpt-4o-mini`, which is lighter and cheaper than larger frontier models. The route also caps `maxOutputTokens` at `260`, keeping responses short enough for the popup and cheaper during repeated testing.
+
+4. **Request validation**
+   The API reads JSON, checks that `body.text` is a string, trims it, and rejects empty input with HTTP 400.
+
+5. **Deployment configuration validation**
+   The route checks `process.env.OPENROUTER_API_KEY` before calling the provider. If Vercel is missing the key, the backend returns a clear JSON error.
+
+6. **CORS handling**
+   The extension runs on a `chrome-extension://` origin, while the backend runs on Vercel. `CORS_HEADERS` and the `OPTIONS` handler allow the extension to make JSON POST requests safely.
+
+7. **Structured output contract**
+   The system prompt asks for exactly `Summary`, `Key insights`, and `Estimated reading time`. The popup parser depends on those labels to render a clean structured UI.
+
+8. **Empty-response guard**
+   The route trims the generated text and rejects empty summaries with a 502 response. This prevents the popup from showing `Done!` with no body.
+
+9. **Readable provider errors**
+   The backend catches AI SDK and OpenRouter failures and returns JSON. The background worker can parse that JSON and show a useful message in the popup.
+
 ### Backend Feature Summary
 
 The backend has five important jobs:
