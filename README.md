@@ -161,15 +161,3 @@ Backend:
 cd backend
 npm run build
 ```
-
-## Submission Notes
-
-For the demo video, show:
-
-- loading `frontend/dist` as an unpacked extension
-- opening an article page
-- clicking **Summarize Page**
-- viewing `Summary`, `Key insights`, and `Estimated reading time`
-- using **Copy** and **Clear**
-- explaining that the API key is secured in Vercel, not exposed in the extension
-
